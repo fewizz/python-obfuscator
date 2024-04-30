@@ -17,9 +17,13 @@
 			"name": "Obfuscate AST",
 			"type": "debugpy",
 			"request": "launch",
-			"program": "${workspaceFolder}/obfuscator.py",
+			"module": "obfuscator_v2",
 			"console": "integratedTerminal",
-			"args": ["C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/check_point"],
+			"cwd": "${workspaceFolder}",
+			"args": [
+				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/check_point",
+				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/check_point_obfuscated"
+			],
 			"justMyCode": false
 		},
 		{
@@ -30,6 +34,13 @@
 			"console": "integratedTerminal",
 			"args": ["examples/01_Simple"],
 			"justMyCode": false
+		},
+		{
+			"name": "Pytest",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "pytest",
+			"cwd": "${workspaceFolder}"
 		}
 	],
 	"inputs": [
