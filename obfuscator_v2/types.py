@@ -1,10 +1,10 @@
 import ast
 from typing import Generator
-from dataclasses import dataclass, field
 from collections import abc, UserString
 
 
 class Module(ast.Module):
+    _name: UserString
 
     def __init__(
         self,
@@ -13,19 +13,52 @@ class Module(ast.Module):
         package: "Package"
     ):
         super().__init__(**module.__dict__)
-        self.name = name
+        self._name = UserString(name)
         self.package = package
-        self.members = dict[str, ast.ClassDef | ast.FunctionDef | ast.Name]()
 
     def full_path(self):
-        return self.package.full_path() + [self.name]
+        return self.package.full_path() + [self._name.data]
+
+    def full_name(self):
+        return ".".join(self.full_path())
+
+    def members(self, particular_name: str | None = None):
+        result = list[ClassDef | FunctionDef | Name | Module | Package]()
+
+        class Visitor(ast.NodeVisitor):
+            def visit_ClassDef(self, node: ClassDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
+
+            def visit_FunctionDef(self, node: FunctionDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
+
+            def visit_Name(self, node: Name):
+                if particular_name and particular_name != node.id:
+                    return
+                result.append(node)
+
+            def visit_ImportFrom(self, node):
+                if not isinstance(node, ImportFrom):
+                    return
+                result.extend((n._entity for n in node.names))
+
+        Visitor().visit(self)
+        return result
 
 
-@dataclass
 class Package:
-    name: str
-    base: "Package | None" = None
-    subs: dict[str, "Module | Package"] = field(default_factory=dict)
+
+    def __init__(self, name: str | UserString, base: "Package | None" = None):
+        if isinstance(name, str):
+            self._name = UserString(name)
+        else:
+            self._name = name
+        self.subs = dict[UserString, "Module | Package"]()
+        self.base = base
 
     def add_module(
         self,
@@ -35,13 +68,15 @@ class Package:
     ) -> Module:
         if len(package_path) > 0:
             package_name = package_path[0]
+            _name = UserString(package_name)
+
             if package_name not in self.subs:
-                self.subs[package_name] = Package(
-                    name=package_name,
+                self.subs[_name] = Package(
+                    name=_name,
                     base=self
                 )
 
-            package = self.subs[package_name]
+            package = self.subs[_name]
             assert isinstance(package, Package)
             return package.add_module(
                 package_path=package_path[1:],
@@ -55,18 +90,18 @@ class Package:
                 name=name,
                 package=self
             )
-            self.subs[node.name] = node
+            self.subs[node._name] = node
             return node
 
     def get(self, path: list[str]) -> "Package | Module":
         assert len(path) > 0
 
         if len(path) > 1:
-            sub = self.subs[path[0]]
+            sub = self.subs[UserString(path[0])]
             assert isinstance(sub, Package)
             return sub.get(path[1:])
         else:
-            return self.subs[path[0]]
+            return self.subs[UserString(path[0])]
 
     def walk(self) -> Generator["Module", None, None]:
         for sub in self.subs.values():
@@ -80,30 +115,42 @@ class Package:
             result = list[str]()
         else:
             result = self.base.full_path()
-        result.append(self.name)
+        result.append(self._name.data)
         return result
 
 
 class Name(ast.Name):
-    _id: UserString
+    _name: UserString
 
-    def __init__(self, node: ast.Name):
-        super().__init__(**node.__dict__)
+    def __init__(self, base, name: str | UserString, ctx: ast.expr_context):
+        self.base = base
+
+        if isinstance(name, str):
+            name = UserString(name)
+        self._name = name
+        self.ctx = ctx
 
     @property
     def id(self):
-        return self._id.data
+        return self._name.data
 
-    @id.setter
-    def id(self, value: str):
-        self._id = UserString(value)
+    @property  # For consistency
+    def name(self):
+        return self._name.data
 
 
 class ClassDef(ast.ClassDef):
+    _base: "Module | ClassDef | FunctionDef"
     _name: UserString
+    bases: list["ClassDef | ast.expr"]
 
-    def __init__(self, node: ast.ClassDef):
+    def __init__(
+        self,
+        base: "Module | ClassDef | FunctionDef",
+        node: ast.ClassDef
+    ):
         super().__init__(**node.__dict__)
+        self._base = base
 
     @property
     def name(self):
@@ -112,12 +159,37 @@ class ClassDef(ast.ClassDef):
     @name.setter
     def name(self, value: str):
         self._name = UserString(value)
+
+    def members(self, particular_name: str | None = None, bases: bool = True):
+        result = self._base.members()
+
+        class Visitor(ast.NodeVisitor):
+            def visit_ClassDef(self, node: ClassDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
+
+            def visit_FunctionDef(self, node: FunctionDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
+
+            def visit_Name(self, node: Name):
+                if particular_name and particular_name != node.id:
+                    return
+                result.append(node)
+
+        for s in self.body:
+            Visitor().visit(s)
+
+        return result
 
 
 class FunctionDef(ast.FunctionDef):
     _name: UserString
 
-    def __init__(self, node: ast.FunctionDef):
+    def __init__(self, base, node: ast.FunctionDef):
+        self.base = base
         super().__init__(**node.__dict__)
 
     @property
@@ -128,25 +200,101 @@ class FunctionDef(ast.FunctionDef):
     def name(self, value: str):
         self._name = UserString(value)
 
+    def members(
+        self, particular_name: str | None = None
+    ):
+        result = list["Module | ClassDef | FunctionDef | Name"]()
 
-class alias(ast.alias):
-    _name: UserString
+        class Visitor(ast.NodeVisitor):
+            def visit_ClassDef(self, node: ClassDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
 
-    def __init__(self, node: ast.alias):
-        super().__init__(**node.__dict__)
+            def visit_FunctionDef(self, node: FunctionDef):
+                if particular_name and particular_name != node.name:
+                    return
+                result.append(node)
+
+            def visit_Name(self, node: Name):
+                if particular_name and particular_name != node.id:
+                    return
+                result.append(node)
+
+        for s in self.body:
+            Visitor().visit(s)
+
+        return result
+
+
+class alias(ast.AST):
+
+    def __init__(
+        self,
+        entity: Package | Module | ClassDef | FunctionDef | Name,
+        asname: str | None
+    ):
+        self._entity = entity
+        self.asname = asname
 
     @property
     def name(self):
-        return self._name.data
-
-    @name.setter
-    def name(self, value: str):
-        self._name = UserString(value)
+        return self._entity._name.data
 
 
 class ImportFrom(ast.ImportFrom):
-    _module: Module
+    _base: Module
+    _from: Module | Package
+    names: list[alias]
 
-    def __init__(self, node: ast.ImportFrom):
+    def __init__(self, base, _from, names: list[alias]):
+        self._base = base
+        self._from = _from
+        self.names = names
+
+    def _branching_module_path(self):
+        base_path = self._base.full_path()
+        from_path = self._from.full_path()
+
+        result = list[str]()
+        for b, f in zip(base_path, from_path):
+            if b != f:
+                break
+            result.append(b)
+
+        return result
+
+    @property
+    def module(self):
+        f = self._from.full_path()
+        b = self._branching_module_path()
+        result = f[len(b):]
+        return ".".join(result) if len(result) else None
+
+    @property
+    def level(self):
+        base = self._base.full_path()
+        brch = self._branching_module_path()
+        diff = len(base) - len(brch)
+        assert diff >= 0
+        return diff
+
+
+class Attribute(ast.Attribute):
+    _attr: UserString
+
+    def __init__(self, base, node: ast.Attribute):
+        self.base = base
+        self._attr = None  # type: ignore
         super().__init__(**node.__dict__)
-        self.names = [alias(a) for a in node.names]
+
+    @property
+    def attr(self):
+        return self._attr.data
+
+    @attr.setter
+    def attr(self, value: str):
+        if self._attr is None:
+            self._attr = UserString(value)
+        else:
+            self._attr.data = value

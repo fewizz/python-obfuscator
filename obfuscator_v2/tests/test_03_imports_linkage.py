@@ -1,7 +1,7 @@
 import ast
-from obfuscator_v2.types import Package
-from obfuscator_v2._01_wrap_name_ids import wrap_name_ids
-from obfuscator_v2._02_collect_members import collect_members
+from obfuscator_v2.types import Package, ClassDef
+from obfuscator_v2._01 import extend_types
+from obfuscator_v2._02_bind_globals import collect_members
 from obfuscator_v2._03_link_imports import link_imports
 
 
@@ -28,13 +28,17 @@ class C(A_0, A_1):
     b = root.add_module([], b, "b")
 
     for m in root.walk():
-        wrap_name_ids(m)
+        extend_types(m)
         collect_members(m)
 
     link_imports(root)
 
-    assert "A_0" in b.members
-    assert isinstance(b.members["A_0"], ast.ClassDef)
+    assert isinstance(
+        next(g for g in b.members() if g.name == "A_0"),
+        ClassDef
+    )
 
-    assert "A_1" in b.members
-    assert isinstance(b.members["A_1"], ast.ClassDef)
+    assert isinstance(
+        next(g for g in b.members() if g.name == "A_1"),
+        ClassDef
+    )

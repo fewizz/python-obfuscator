@@ -1,8 +1,9 @@
 import ast
-from obfuscator_v2.types import Module, Package
+from collections import UserString
+from obfuscator_v2.types import Module, Package, ImportFrom, alias
 
 
-class ImportLinker(ast.NodeVisitor):
+class ImportLinker(ast.NodeTransformer):
     def __init__(
         self,
         root_package: Package,
@@ -14,77 +15,88 @@ class ImportLinker(ast.NodeVisitor):
         self.processed_modules = processed_modules
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
+        self.processed_modules.add(self.module_node.full_name())
+
         if node.level == 0:
-            begin = None
+            _from = None
         else:
-            begin = self.module_node.package
-            node.level -= 1
-            while node.level > 0:
-                assert begin.base is not None
-                begin = begin.base
-                node.level -= 1
+            _from = self.module_node.package
+            _level = node.level - 1
+            while _level > 0:
+                assert _from.base is not None
+                _from = _from.base
+                _level -= 1
 
         if node.module is not None:
             path = node.module.split(".")
-            if begin is not None:
-                begin = begin.get(path)
-            elif path[0] == self.root_package.name:
-                begin = self.root_package
+            if _from is not None:
+                _from = _from.get(path)
+            elif path[0] == self.root_package._name:
+                _from = self.root_package
                 path = path[1:]
                 if len(path) > 0:
-                    begin = begin.get(path)
+                    _from = _from.get(path)
 
-        if begin is not None:
-            what = list()
+        if _from is not None:
+            names = list[alias]()
 
-            if isinstance(begin, Module):
-                if begin.name not in self.processed_modules:
+            def ensure_module_handled(module: Module):
+                if module.full_name() not in self.processed_modules:
                     ImportLinker(
                         root_package=self.root_package,
-                        module_node=begin,
+                        module_node=module,
                         processed_modules=self.processed_modules
-                    ).visit(begin)
+                    ).visit(module)
 
-                for n in node.names:
-                    # TODO asname
-                    mem = begin.members[n.name]
-                    what.append(mem)
-                    self.module_node.members[n.name] = mem
-            else:
-                if "__init__" in begin.subs:
-                    init = begin.subs["__init__"]
-                    assert isinstance(init, Module)
-                    if begin.name not in self.processed_modules:
-                        ImportLinker(
-                            root_package=self.root_package,
-                            module_node=init,
-                            processed_modules=self.processed_modules
-                        ).visit(init)
+            init_globals = None
+
+            if isinstance(_from, Module):
+                ensure_module_handled(_from)
+            elif "__init__" in _from.subs:
+                init = _from.subs[UserString("__init__")]
+                assert isinstance(init, Module)
+                ensure_module_handled(init)
+                init_globals = {g._name: g for g in init.members()}
+
+            from_globals = None
+            if isinstance(_from, Module):
+                from_globals = {g._name: g for g in _from.members()}
+
+            for n in node.names:
+                if init_globals is not None and n.name in init_globals:
+                    names.append(alias(
+                        entity=init_globals[n.name],
+                        asname=n.asname
+                    ))
+                elif isinstance(_from, Module):
+                    assert from_globals is not None
+                    mem = from_globals[UserString(n.name)]
+                    names.append(alias(
+                        entity=mem,
+                        asname=n.asname
+                    ))
                 else:
-                    init = None
+                    names.append(alias(
+                        entity=_from.get([n.name]),
+                        asname=n.asname
+                    ))
 
-                for n in node.names:
-                    # TODO asname
-                    if init is not None and n.name in init.members:
-                        what.append(init.members[n.name])
-                    else:
-                        what.append(begin.get([n.name]))
-
-            # print(
-            #     self.module_node.name,
-            #     "from", begin.name, ":",
-            #     [w.name for w in what]
-            # )
-
-        self.processed_modules.add(self.module_node.name)
+            return ImportFrom(
+                base=self.module_node,
+                _from=_from,
+                names=names
+            )
+        else:
+            return node
 
 
 def link_imports(root_package: Package):
     processed_modules = set[str]()
 
     for node in root_package.walk():
-        ImportLinker(
-            root_package=root_package,
-            module_node=node,
-            processed_modules=processed_modules
-        ).visit(node)
+        if node.full_name() not in processed_modules:
+            ImportLinker(
+                root_package=root_package,
+                module_node=node,
+                processed_modules=processed_modules
+            ).visit(node)

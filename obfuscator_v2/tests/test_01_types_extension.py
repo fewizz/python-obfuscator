@@ -1,10 +1,10 @@
 import ast
 from collections import UserString
-from obfuscator_v2._01_wrap_name_ids import wrap_name_ids
-from obfuscator_v2.types import Package
+from obfuscator_v2._01 import extend_types
+from obfuscator_v2.types import Package, Name
 
 
-def test_name_id_replacement():
+def test_types_extension():
     node = ast.parse("""
 a = 0
 
@@ -17,12 +17,14 @@ class SomeClass:
     p = Package("")
     node = p.add_module([], node, "")
 
-    wrap_name_ids(node)
+    extend_types(node)
 
     assignment = node.body[0]
     assert isinstance(assignment, ast.Assign)
 
     target = assignment.targets[0]
-    assert isinstance(target, ast.Name)
-    assert isinstance(target.id, UserString)
-    assert target.id.data == "a"
+    assert isinstance(target, Name)
+    assert isinstance(target.id, str)
+    assert isinstance(target._name, UserString)
+    assert target.id == "a"
+    assert target._name.data == "a"
