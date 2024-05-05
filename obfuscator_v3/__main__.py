@@ -2,7 +2,7 @@ import sys
 import pathlib
 import ast
 import shutil
-from .types import Package, Module, ClassDef, FunctionDef, AsyncFunctionDef
+from .types import Package, Module, ClassDef
 
 # Первый аргумент программы - файл исходного кода
 if len(sys.argv) <= 1:
@@ -38,34 +38,16 @@ for py_path in dir_path.glob("**/*.*"):
 
 shutil.rmtree(dst_dir_path, ignore_errors=True)
 
-handled = set[Module]()
+transformed_modules = set[Module]()
 
 for node in root_package.walk():
-    from .module_transformer import ModuleGlobalsTransformer
-    ModuleGlobalsTransformer(
+    from .transformer import Transformer
+    Transformer(
         node=node,
         root_package=root_package,
-        handled_modules=handled
+        transformed_modules=transformed_modules,
+        deferred=list()
     ).visit(node)
-
-for module_node in root_package.walk():
-    class Visitor(ast.NodeVisitor):
-        def visit_FunctionDef(self, node: FunctionDef):
-            ModuleGlobalsTransformer(
-                node=node,
-                root_package=root_package,
-                handled_modules=handled,
-                globals=module_node.globals()
-            ).generic_visit(node)
-
-        def visit_AsyncFunctionDef(self, node: AsyncFunctionDef):
-            ModuleGlobalsTransformer(
-                node=node,
-                root_package=root_package,
-                handled_modules=handled,
-                globals=module_node.globals()
-            ).generic_visit(node)
-    Visitor().visit(module_node)
 
 
 # Получение обфусцированного имени.
@@ -83,7 +65,7 @@ def next_name(_name_idx: list[int] = [0]) -> str:
 
     _name_idx[0] += 1
 
-    return ''.join(name_chars)
+    return "obfuscated_" + ''.join(name_chars)
 
 
 for node in root_package.walk():
@@ -96,8 +78,8 @@ for node in root_package.walk():
     path = node.path()[1:]
     path = "/".join(s.data for s in path)
     ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
-    with open(dst_dir_path/f"{path}.py", "w") as f:
-        f.write(ast.unparse(node))
+    with open(dst_dir_path/f"{path}.py", "wb") as f:
+        f.write(ast.unparse(node).encode("utf-8"))
 
 for path, bytes in non_py_file_paths.items():
     ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)

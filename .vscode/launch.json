@@ -21,8 +21,8 @@
 			"console": "integratedTerminal",
 			"cwd": "${workspaceFolder}",
 			"args": [
-				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/check_point",
-				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/check_point_obfuscated"
+				"E:/firewall-migration-tool/connectors/check_point",
+				"E:/firewall-migration-tool/connectors/check_point_obfuscated"
 			],
 			"justMyCode": false
 		},

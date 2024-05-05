@@ -6,15 +6,20 @@ from .types import (
 )
 
 
-class ModuleGlobalsTransformer(ast.NodeTransformer):
+level = 0
+transforming = set[Module]()
+
+
+class Transformer(ast.NodeTransformer):
     def __init__(
         self,
         node: Module | ClassDef | FunctionDef | AsyncFunctionDef,
         root_package: Package,
-        handled_modules: set[Module],
+        transformed_modules: set[Module],
+        deferred: list[FunctionDef | AsyncFunctionDef],
         globals: dict[
             str, Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
-        ] | None = None
+        ] | None = None,
     ):
         self.node = node
         self.entities = dict[
@@ -22,22 +27,45 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
             Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
         ]()
         self.root_package = root_package
-        self.handled = handled_modules
+        self.handled_modules = transformed_modules
         if globals is None:
             globals = dict[
                 str, Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
             ]()
         self.globals = globals
+        self.deferred = deferred  # list[FunctionDef | AsyncFunctionDef]()
 
-    def visit(self, node):
-        if isinstance(node, Module):
-            if node in self.handled:
-                return node
-            super().visit(node)
-            self.handled.add(node)
+    def visit_Module(self, node: Module):
+        global level
+
+        full_name = '.'.join(p.data for p in node.path())
+        if node in self.handled_modules:
+            print(f"{'  '*level}skipping module \"{full_name}\"")
             return node
-        else:
-            return super().visit(node)
+
+        assert node not in transforming
+        transforming.add(node)
+
+        assert self.node is node
+
+        print(f"{'  '*level}module \"{full_name}\"")
+        level += 1
+
+        super().generic_visit(node)
+        self.handled_modules.add(node)
+
+        for deferred in self.deferred:
+            Transformer(
+                node=deferred,
+                root_package=self.root_package,
+                transformed_modules=self.handled_modules,
+                globals=self.entities | self.globals,
+                deferred=self.deferred
+            ).visit(deferred)
+
+        level -= 1
+
+        return node
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         if node.level == 0:
@@ -79,10 +107,11 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
             if isinstance(_from_where, Package):
                 e = _from_where.try_get_module(a.name)
                 if e is not None:
-                    ModuleGlobalsTransformer(
+                    Transformer(
                         node=e,
                         root_package=self.root_package,
-                        handled_modules=self.handled
+                        transformed_modules=self.handled_modules,
+                        deferred=list()
                     ).visit(e)
                     what.append(alias(entity=e, asname=a.asname))
                     self.entities[a.asname or a.name] = e
@@ -93,10 +122,11 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
 
             assert isinstance(_from_where, Module)
 
-            ModuleGlobalsTransformer(
+            Transformer(
                 node=_from_where,
                 root_package=self.root_package,
-                handled_modules=self.handled,
+                transformed_modules=self.handled_modules,
+                deferred=list()
             ).visit(_from_where)
             globals = _from_where.globals()
 
@@ -110,10 +140,11 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
             if isinstance(e, Package):
                 e = e.try_get_module("__init__")
                 assert isinstance(e, Module)
-                ModuleGlobalsTransformer(
+                Transformer(
                     node=e,
                     root_package=self.root_package,
-                    handled_modules=self.handled
+                    transformed_modules=self.handled_modules,
+                    deferred=list()
                 ).visit(e)
 
             self.entities[a.asname or a.name] = e
@@ -125,24 +156,22 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
         )
 
     def visit_Name(self, node: ast.Name):
-        name = Name(id=node.id, ctx=node.ctx)
+        assert type(node) is ast.Name
+        new_node = Name(id=node.id, ctx=node.ctx)
 
         if type(node.ctx) is ast.Store and node.id not in self.entities:
-            self.entities[node.id] = name
+            self.entities[node.id] = new_node
         else:
             scope = self.globals | self.entities
             if node.id in scope:
                 e = scope[node.id]
                 if isinstance(e, Module) and e.name_ptr.data == "__init__":
                     e = e.owner
-                name.name_ptr = e.name_ptr
+                new_node.name_ptr = e.name_ptr
 
-        return name
+        return new_node
 
-    def visit_Attribute(self, node):
-        if isinstance(node, Attribute):
-            return node
-
+    def visit_Attribute(self, node: ast.Attribute):
         assert type(node) is ast.Attribute
         super().generic_visit(node)
 
@@ -152,45 +181,64 @@ class ModuleGlobalsTransformer(ast.NodeTransformer):
 
         if isinstance(node.value, Name) and node.value.id in scope:
             entity = scope[node.value.id]
-            # if (
-            #     isinstance(entity, Module)
-            #     and entity.name_ptr.data == "__init__"
-            # ):
-            #     entity = entity.owner
             assert isinstance(entity, Name | Module | ClassDef | FunctionDef)
 
             if isinstance(entity, Module):
                 attr_name = entity.globals()[node.attr].name_ptr
 
-        node = Attribute(entity=entity, attr=attr_name, ctx=node.ctx)
-
-        return node
+        new_node = Attribute(entity=entity, attr=attr_name, ctx=node.ctx)
+        return new_node
 
     def visit_ClassDef(self, node: ast.ClassDef):
         assert type(node) is ast.ClassDef
 
-        _node = ClassDef(self.node, **node.__dict__)
-        self.entities[_node.name_ptr.data] = _node
+        global level
+        print(f"{'  '*level}class \"{node.name}\"")
+        level += 1
 
-        ModuleGlobalsTransformer(
-            node=_node,
+        node = ClassDef(owner=self.node, **node.__dict__)
+
+        Transformer(
+            node=node,
             root_package=self.root_package,
-            handled_modules=self.handled,
-            globals=self.entities | self.globals
-        ).generic_visit(_node)
+            transformed_modules=self.handled_modules,
+            globals=self.entities | self.globals,
+            deferred=self.deferred
+        ).generic_visit(node)
 
-        return _node
+        self.entities[node.name_ptr.data] = node
 
-    def visit_FunctionDef(self, node):
-        if not isinstance(node, FunctionDef):
-            node = FunctionDef(self.node, **node.__dict__)
-            self.entities[node.name_ptr.data] = node
-        assert isinstance(node, FunctionDef)
+        level -= 1
+
         return node
 
-    def visit_AsyncFunctionDef(self, node):
-        if not isinstance(node, AsyncFunctionDef):
-            node = AsyncFunctionDef(self.node, **node.__dict__)
+    def visit_FunctionDef(self, node: ast.FunctionDef | FunctionDef):
+        if node is self.node:
+            assert type(node) is FunctionDef
+
+            global level
+            print(f"{'  '*level}function \"{node.name}\"")
+            level += 1
+
+            super().generic_visit(node)
+
+            level -= 1
+        elif type(node) is ast.FunctionDef:
+            node = FunctionDef(owner=self.node, **node.__dict__)
             self.entities[node.name_ptr.data] = node
-        assert isinstance(node, AsyncFunctionDef)
+            self.deferred.append(node)
+
+        return node
+
+    def visit_AsyncFunctionDef(
+        self, node: ast.AsyncFunctionDef | AsyncFunctionDef
+    ):
+        if node is self.node:
+            assert type(node) is AsyncFunctionDef
+            super().generic_visit(node)
+        elif type(node) is ast.AsyncFunctionDef:
+            node = AsyncFunctionDef(owner=self.node, **node.__dict__)
+            self.entities[node.name_ptr.data] = node
+            self.deferred.append(node)
+
         return node
