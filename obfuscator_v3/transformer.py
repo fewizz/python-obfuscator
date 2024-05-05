@@ -4,6 +4,7 @@ from .types import (
     Module, Name, ClassDef, FunctionDef, AsyncFunctionDef,
     ImportFrom, Package, alias, Attribute
 )
+from .members import members
 
 
 level = 0
@@ -16,23 +17,11 @@ class Transformer(ast.NodeTransformer):
         node: Module | ClassDef | FunctionDef | AsyncFunctionDef,
         root_package: Package,
         transformed_modules: set[Module],
-        deferred: list[FunctionDef | AsyncFunctionDef],
-        globals: dict[
-            str, Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
-        ] | None = None,
+        deferred: list[FunctionDef | AsyncFunctionDef]
     ):
         self.node = node
-        self.entities = dict[
-            str,
-            Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
-        ]()
         self.root_package = root_package
         self.handled_modules = transformed_modules
-        if globals is None:
-            globals = dict[
-                str, Name | Module | ClassDef | FunctionDef | AsyncFunctionDef
-            ]()
-        self.globals = globals
         self.deferred = deferred  # list[FunctionDef | AsyncFunctionDef]()
 
     def visit_Module(self, node: Module):
@@ -51,7 +40,7 @@ class Transformer(ast.NodeTransformer):
         print(f"{'  '*level}module \"{full_name}\"")
         level += 1
 
-        super().generic_visit(node)
+        self.generic_visit(node)
         self.handled_modules.add(node)
 
         for deferred in self.deferred:
@@ -59,7 +48,6 @@ class Transformer(ast.NodeTransformer):
                 node=deferred,
                 root_package=self.root_package,
                 transformed_modules=self.handled_modules,
-                globals=self.entities | self.globals,
                 deferred=self.deferred
             ).visit(deferred)
 
@@ -114,7 +102,6 @@ class Transformer(ast.NodeTransformer):
                         deferred=list()
                     ).visit(e)
                     what.append(alias(entity=e, asname=a.asname))
-                    self.entities[a.asname or a.name] = e
                     continue
                 else:
                     _from_where = _from_where.try_get_module("__init__")
@@ -147,8 +134,6 @@ class Transformer(ast.NodeTransformer):
                     deferred=list()
                 ).visit(e)
 
-            self.entities[a.asname or a.name] = e
-
         return ImportFrom(
             owner=self.node,
             from_where=from_where,
@@ -159,10 +144,11 @@ class Transformer(ast.NodeTransformer):
         assert type(node) is ast.Name
         new_node = Name(id=node.id, ctx=node.ctx)
 
-        if type(node.ctx) is ast.Store and node.id not in self.entities:
-            self.entities[node.id] = new_node
+        scope = members(self.node)
+
+        if type(node.ctx) is ast.Store and node.id not in scope:
+            scope[node.id] = new_node
         else:
-            scope = self.globals | self.entities
             if node.id in scope:
                 e = scope[node.id]
                 if isinstance(e, Module) and e.name_ptr.data == "__init__":
@@ -173,9 +159,9 @@ class Transformer(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute):
         assert type(node) is ast.Attribute
-        super().generic_visit(node)
+        self.generic_visit(node)
 
-        scope = self.entities | self.globals
+        scope = members(self.node)  # self.entities | self.globals
         entity = node.value
         attr_name = UserString(node.attr)
 
@@ -202,11 +188,8 @@ class Transformer(ast.NodeTransformer):
             node=node,
             root_package=self.root_package,
             transformed_modules=self.handled_modules,
-            globals=self.entities | self.globals,
             deferred=self.deferred
         ).generic_visit(node)
-
-        self.entities[node.name_ptr.data] = node
 
         level -= 1
 
@@ -220,12 +203,11 @@ class Transformer(ast.NodeTransformer):
             print(f"{'  '*level}function \"{node.name}\"")
             level += 1
 
-            super().generic_visit(node)
+            self.generic_visit(node)
 
             level -= 1
         elif type(node) is ast.FunctionDef:
             node = FunctionDef(owner=self.node, **node.__dict__)
-            self.entities[node.name_ptr.data] = node
             self.deferred.append(node)
 
         return node
@@ -235,10 +217,34 @@ class Transformer(ast.NodeTransformer):
     ):
         if node is self.node:
             assert type(node) is AsyncFunctionDef
-            super().generic_visit(node)
+            self.generic_visit(node)
         elif type(node) is ast.AsyncFunctionDef:
             node = AsyncFunctionDef(owner=self.node, **node.__dict__)
-            self.entities[node.name_ptr.data] = node
             self.deferred.append(node)
 
+        return node
+
+    def generic_visit(self, node):
+        for field, old_value in ast.iter_fields(node):
+            if isinstance(old_value, list):
+                # new_values = []
+                for idx, value in enumerate(old_value):
+                    # if isinstance(value, ast.AST):
+                    value = self.visit(value)
+                    if value is None:
+                        continue
+                    else:
+                        old_value[idx] = value
+                        # elif not isinstance(value, ast.AST):
+                        #     raise RuntimeError()
+                        #     new_values.extend(value)
+                        #     continue
+                    # new_values.append(value)
+                # old_value[:] = new_values
+            elif isinstance(old_value, ast.AST):
+                new_node = self.visit(old_value)
+                if new_node is None:
+                    delattr(node, field)
+                else:
+                    setattr(node, field, new_node)
         return node
