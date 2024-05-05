@@ -86,48 +86,48 @@ class Module(ast.Module):
     def path(self):
         return self.owner.path() + [self.name_ptr]
 
-    def globals(self):
-        globals = dict[
-            str,
-            "Name | Module | ClassDef | FunctionDef | AsyncFunctionDef"
-        ]()
+    # def globals(self):
+    #     globals = dict[
+    #         str,
+    #         "Name | Module | ClassDef | FunctionDef | AsyncFunctionDef"
+    #     ]()
 
-        class Visitor(ast.NodeVisitor):
-            def visit_ImportFrom(self, node: ImportFrom):
-                if not isinstance(node, ImportFrom):
-                    return
-                for alias in node.what:
-                    name = alias.entity.name_ptr.data
+    #     class Visitor(ast.NodeVisitor):
+    #         def visit_ImportFrom(self, node: ImportFrom):
+    #             if not isinstance(node, ImportFrom):
+    #                 return
+    #             for alias in node.what:
+    #                 name = alias.entity.name_ptr.data
 
-                    if alias.asname is not None:
-                        name = alias.asname.data
+    #                 if alias.asname is not None:
+    #                     name = alias.asname.data
 
-                    assert isinstance(name, str)
+    #                 assert isinstance(name, str)
 
-                    e = alias.entity
+    #                 e = alias.entity
 
-                    if isinstance(e, Package):
-                        e = e.try_get_module("__init__")
-                        assert e is not None
+    #                 if isinstance(e, Package):
+    #                     e = e.try_get_module("__init__")
+    #                     assert e is not None
 
-                    globals[name] = e
+    #                 globals[name] = e
 
-            def visit_Name(self, node: Name):
-                if type(node.ctx) is ast.Store:
-                    globals[node.name_ptr.data] = node
+    #         def visit_Name(self, node: Name):
+    #             if type(node.ctx) is ast.Store:
+    #                 globals[node.name_ptr.data] = node
 
-            def visit_ClassDef(self, node: ClassDef):
-                globals[node.name_ptr.data] = node
+    #         def visit_ClassDef(self, node: ClassDef):
+    #             globals[node.name_ptr.data] = node
 
-            def visit_FunctionDef(self, node: FunctionDef):
-                globals[node.name_ptr.data] = node
+    #         def visit_FunctionDef(self, node: FunctionDef):
+    #             globals[node.name_ptr.data] = node
 
-            def visit_FunctionAsyncDef(self, node: AsyncFunctionDef):
-                globals[node.name_ptr.data] = node
+    #         def visit_FunctionAsyncDef(self, node: AsyncFunctionDef):
+    #             globals[node.name_ptr.data] = node
 
-        Visitor().visit(self)
+    #     Visitor().visit(self)
 
-        return globals
+    #     return globals
 
 
 class alias(ast.AST):
@@ -277,23 +277,32 @@ class Attribute(ast.expr):
 
     def __init__(
         self,
-        entity: ast.expr | Module | ClassDef | FunctionDef,
-        attr: str | UserString,
+        left: ast.expr | Package | Module | ClassDef | FunctionDef
+        | AsyncFunctionDef | Name,
+        right: str | UserString | Module | Package | ClassDef | FunctionDef
+        | Name | AsyncFunctionDef,
         ctx: ast.expr_context
     ):
-        self.entity = entity
-        if not isinstance(attr, UserString):
-            attr = UserString(attr)
-        self.attr_ptr = attr
+        self.left = left
+        if isinstance(right, str):
+            right = UserString(right)
+        self.right = right
         self.ctx = ctx
 
     @property
     def attr(self):
-        return self.attr_ptr.data
+        return self.name_ptr.data
+
+    @property
+    def name_ptr(self) -> UserString:
+        if isinstance(self.right, UserString):
+            return self.right
+        else:
+            return self.right.name_ptr
 
     @property
     def value(self):
-        e = self.entity
+        e = self.left
         if isinstance(e, Module) and e.name_ptr.data == "__init__":
             e = e.owner
 

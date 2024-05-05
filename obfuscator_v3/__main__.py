@@ -2,7 +2,9 @@ import sys
 import pathlib
 import ast
 import shutil
+from collections import UserString
 from .types import Package, Module, ClassDef
+from .members import members
 
 # Первый аргумент программы - файл исходного кода
 if len(sys.argv) <= 1:
@@ -68,10 +70,30 @@ def next_name(_name_idx: list[int] = [0]) -> str:
     return "obfuscated_" + ''.join(name_chars)
 
 
-for node in root_package.walk():
-    for name, g in node.globals().items():
+transformed_names = set[UserString]()
+transformed_classes = set[ClassDef]()
+
+
+def handle_class(node: ClassDef):
+    if node in transformed_classes:
+        return
+
+    transformed_classes.add(node)
+    handle_any(node)
+
+    if node.name_ptr not in transformed_names:
+        node.name_ptr.data = next_name()
+        transformed_names.add(node.name_ptr)
+
+
+def handle_any(node: ClassDef | Module):
+    for name, g in members(node).items():
         if isinstance(g, ClassDef):
-            g.name_ptr.data = next_name()
+            handle_class(g)
+
+
+for node in root_package.walk():
+    handle_any(node)
 
 
 for node in root_package.walk():

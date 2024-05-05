@@ -6,11 +6,6 @@ from .types import (
 
 
 def members(node: Module | ClassDef | FunctionDef | AsyncFunctionDef):
-    result = dict[
-        str,
-        Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name
-    ]()
-
     if (
         node.owner is not None
         and isinstance(
@@ -18,9 +13,19 @@ def members(node: Module | ClassDef | FunctionDef | AsyncFunctionDef):
             Module | ClassDef | FunctionDef | AsyncFunctionDef
         )
     ):
-        result = result | members(node.owner)
+        result = members(node.owner)
+    else:
+        result = dict[
+            str,
+            Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name
+        ]()
 
     class Visitor(ast.NodeVisitor):
+
+        def visit_Name(self, node):
+            if isinstance(node, Name):
+                if type(node.ctx) is ast.Store:
+                    result[node.name_ptr.data] = node
 
         def visit_ImportFrom(self, node):
             if isinstance(node, ImportFrom):

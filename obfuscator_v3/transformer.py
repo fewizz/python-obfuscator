@@ -22,7 +22,7 @@ class Transformer(ast.NodeTransformer):
         self.node = node
         self.root_package = root_package
         self.handled_modules = transformed_modules
-        self.deferred = deferred  # list[FunctionDef | AsyncFunctionDef]()
+        self.deferred = deferred
 
     def visit_Module(self, node: Module):
         global level
@@ -115,10 +115,11 @@ class Transformer(ast.NodeTransformer):
                 transformed_modules=self.handled_modules,
                 deferred=list()
             ).visit(_from_where)
-            globals = _from_where.globals()
 
-            if a.name in globals:
-                e = globals[a.name]
+            scope = members(_from_where)
+
+            if a.name in scope:
+                e = scope[a.name]
             else:
                 e = _from_where.owner.get(name=a.name)
 
@@ -162,17 +163,29 @@ class Transformer(ast.NodeTransformer):
         self.generic_visit(node)
 
         scope = members(self.node)  # self.entities | self.globals
-        entity = node.value
-        attr_name = UserString(node.attr)
+        left = node.value
+        right = UserString(node.attr)
 
-        if isinstance(node.value, Name) and node.value.id in scope:
-            entity = scope[node.value.id]
-            assert isinstance(entity, Name | Module | ClassDef | FunctionDef)
+        if isinstance(left, Name) and left.id in scope:
+            left = scope[left.id]
+            if not isinstance(left, Package) and not isinstance(left, Name):
+                left_scope = members(left)
+                if right.data in left_scope:
+                    right = left_scope[right.data]
+            # assert isinstance(right, Name | Module | ClassDef | FunctionDef)
 
-            if isinstance(entity, Module):
-                attr_name = entity.globals()[node.attr].name_ptr
+        elif (
+            isinstance(left, Attribute)
+            and isinstance(left.right, ClassDef | Module)
+        ):
+            right_scope = members(left.right)
+            if right.data in right_scope:
+                right = right_scope[right.data]
 
-        new_node = Attribute(entity=entity, attr=attr_name, ctx=node.ctx)
+        # if isinstance(left, Module):
+        #    attr_name = members(left)[node.attr].name_ptr
+
+        new_node = Attribute(left=left, right=right, ctx=node.ctx)
         return new_node
 
     def visit_ClassDef(self, node: ast.ClassDef):
