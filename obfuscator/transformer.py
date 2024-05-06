@@ -16,7 +16,7 @@ class Transformer(ast.NodeTransformer):
         self,
         node: Module | ClassDef | FunctionDef | AsyncFunctionDef,
         root_package: Package,
-        transformed_modules: set[Module],
+        transformed_modules: set["Transformer"],
         deferred: list[FunctionDef | AsyncFunctionDef]
     ):
         self.node = node
@@ -28,7 +28,7 @@ class Transformer(ast.NodeTransformer):
         global level
 
         full_name = '.'.join(p.data for p in node.path())
-        if node in self.handled_modules:
+        if node in (t.node for t in self.handled_modules):
             print(f"{'  '*level}skipping module \"{full_name}\"")
             return node
 
@@ -41,7 +41,21 @@ class Transformer(ast.NodeTransformer):
         level += 1
 
         self.generic_visit(node)
-        self.handled_modules.add(node)
+
+        self.handled_modules.add(self)
+
+        level -= 1
+
+        return node
+
+    def resolve_deferred(self):
+        assert isinstance(self.node, Module)
+
+        global level
+        full_name = '.'.join(p.data for p in self.node.path())
+
+        print(f"{'  '*level}module (deferred) \"{full_name}\"")
+        level += 1
 
         for deferred in self.deferred:
             Transformer(
@@ -52,8 +66,6 @@ class Transformer(ast.NodeTransformer):
             ).visit(deferred)
 
         level -= 1
-
-        return node
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         if node.level == 0:
@@ -92,58 +104,55 @@ class Transformer(ast.NodeTransformer):
         for a in node.names:
             _from_where = from_where
 
+            e = None
+
             if isinstance(_from_where, Package):
-                e = _from_where.try_get_module(a.name)
-                if e is not None:
+                e = _from_where.try_get(a.name)
+
+                if isinstance(e, Module):
                     Transformer(
                         node=e,
                         root_package=self.root_package,
                         transformed_modules=self.handled_modules,
                         deferred=list()
                     ).visit(e)
-                    what.append(alias(entity=e, asname=a.asname))
-                    continue
+                elif e is None:
+                    init = _from_where.try_get_module("__init__")
+                    assert isinstance(init, Module)
+                    _from_where = init
                 else:
-                    _from_where = _from_where.try_get_module("__init__")
-                    assert _from_where is not None
+                    assert isinstance(e, Package)
 
-            assert isinstance(_from_where, Module)
+            if e is None:
+                assert isinstance(_from_where, Module)
 
-            Transformer(
-                node=_from_where,
-                root_package=self.root_package,
-                transformed_modules=self.handled_modules,
-                deferred=list()
-            ).visit(_from_where)
-
-            scope = members(_from_where)
-
-            if a.name in scope:
-                e = scope[a.name]
-            else:
-                e = _from_where.owner.get(name=a.name)
-
-            what.append(alias(entity=e, asname=a.asname))
-
-            if isinstance(e, Package):
-                e = e.try_get_module("__init__")
-                assert isinstance(e, Module)
                 Transformer(
-                    node=e,
+                    node=_from_where,
                     root_package=self.root_package,
                     transformed_modules=self.handled_modules,
                     deferred=list()
-                ).visit(e)
+                ).visit(_from_where)
+
+                scope = members(_from_where)
+                assert a.name in scope
+
+                # if a.name in scope:
+                e = scope[a.name]
+                # else:
+                #     e = _from_where.owner.get(name=a.name)
+
+            # assert e is not None
+
+            what.append(alias(entity=e, asname=a.asname))
 
         return ImportFrom(
             owner=self.node,
-            from_where=from_where,
             what=what
         )
 
     def visit_Name(self, node: ast.Name):
         assert type(node) is ast.Name
-        new_node = Name(id=node.id, ctx=node.ctx)
+        new_node = Name(owner=self.node, id=node.id, ctx=node.ctx)
 
         scope = members(self.node)
 

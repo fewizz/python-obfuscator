@@ -40,6 +40,8 @@ def members(node: Module | ClassDef | FunctionDef | AsyncFunctionDef):
                         if init is not None:
                             entity = init
                     result[name] = entity
+            else:
+                assert isinstance(node, ast.ImportFrom)
 
         def visit_ClassDef(self, node):
             if isinstance(node, ClassDef):

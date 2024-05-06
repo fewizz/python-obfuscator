@@ -4,10 +4,14 @@ from collections import UserString
 
 
 class Name(ast.expr):
-    name_ptr: UserString
-    ctx: ast.expr_context
 
-    def __init__(self, id: str | UserString, ctx):
+    def __init__(
+        self,
+        owner: "Module | ClassDef | FunctionDef | AsyncFunctionDef",
+        id: str | UserString,
+        ctx: ast.expr_context
+    ):
+        self.owner = owner
         if isinstance(id, str):
             id = UserString(id)
         self.name_ptr = id
@@ -44,7 +48,7 @@ class Package:
         )
 
     def get_or_add_package(self, name: str):
-        p = next((e for e in self.entries if e.name_ptr == name), None)
+        p = self.try_get(name)
         if p is not None:
             assert isinstance(p, Package)
             return p
@@ -54,6 +58,12 @@ class Package:
 
     def get(self, name: str):
         return next(e for e in self.entries if e.name_ptr == name)
+
+    def try_get(self, name: str):
+        return next(
+            (e for e in self.entries if e.name_ptr == name),
+            None
+        )
 
     def path(self) -> list[UserString]:
         if self.owner is not None:
@@ -86,48 +96,12 @@ class Module(ast.Module):
     def path(self):
         return self.owner.path() + [self.name_ptr]
 
-    # def globals(self):
-    #     globals = dict[
-    #         str,
-    #         "Name | Module | ClassDef | FunctionDef | AsyncFunctionDef"
-    #     ]()
+    def move_to(self, package: Package):
+        prev_owner = self.owner
+        prev_owner.entries.remove(self)
 
-    #     class Visitor(ast.NodeVisitor):
-    #         def visit_ImportFrom(self, node: ImportFrom):
-    #             if not isinstance(node, ImportFrom):
-    #                 return
-    #             for alias in node.what:
-    #                 name = alias.entity.name_ptr.data
-
-    #                 if alias.asname is not None:
-    #                     name = alias.asname.data
-
-    #                 assert isinstance(name, str)
-
-    #                 e = alias.entity
-
-    #                 if isinstance(e, Package):
-    #                     e = e.try_get_module("__init__")
-    #                     assert e is not None
-
-    #                 globals[name] = e
-
-    #         def visit_Name(self, node: Name):
-    #             if type(node.ctx) is ast.Store:
-    #                 globals[node.name_ptr.data] = node
-
-    #         def visit_ClassDef(self, node: ClassDef):
-    #             globals[node.name_ptr.data] = node
-
-    #         def visit_FunctionDef(self, node: FunctionDef):
-    #             globals[node.name_ptr.data] = node
-
-    #         def visit_FunctionAsyncDef(self, node: AsyncFunctionDef):
-    #             globals[node.name_ptr.data] = node
-
-    #     Visitor().visit(self)
-
-    #     return globals
+        self.owner = package
+        package.entries.add(self)
 
 
 class alias(ast.AST):
@@ -147,22 +121,24 @@ class alias(ast.AST):
 
 
 class ImportFrom(ast.stmt):
-    from_where: Package | Module
     what: list[alias]
 
     def __init__(
         self,
         owner: "Module | ClassDef | FunctionDef | AsyncFunctionDef",
-        from_where: Package | Module,
         what: list[alias]
     ):
         self.owner = owner
-        self.from_where = from_where
         self.what = what
+
+    def from_where(self):
+        _from = self.what[0].entity.owner
+        assert isinstance(_from, Module | Package)
+        return _from
 
     def _branch_path(self):
         owner_path = self.owner.owning_module().path()
-        from_path = self.from_where.path()
+        from_path = self.from_where().path()
 
         result = list[UserString]()
         for b, f in zip(owner_path, from_path):
@@ -182,7 +158,7 @@ class ImportFrom(ast.stmt):
 
     @property
     def module(self):
-        from_path = self.from_where.path()
+        from_path = self.from_where().path()
         branch_path = self._branch_path()
         result = from_path[len(branch_path):]
         return ".".join(s.data for s in result) if len(result) else None
@@ -307,6 +283,6 @@ class Attribute(ast.expr):
             e = e.owner
 
         if isinstance(e, Name | Module | Package | ClassDef | FunctionDef):
-            return Name(e.name_ptr, ctx=ast.Load())
+            return ast.Name(id=e.name_ptr.data, ctx=ast.Load())
 
         return e

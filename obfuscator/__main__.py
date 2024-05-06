@@ -1,10 +1,10 @@
-import ast
 import sys
-import os
-import shutil
 import pathlib
-from . import next_name, Ctx, Module
-from .handle_statements import handle_statements
+import ast
+import shutil
+from collections import UserString
+from .types import Package, Module, ClassDef
+from .members import members
 
 # Первый аргумент программы - файл исходного кода
 if len(sys.argv) <= 1:
@@ -16,44 +16,107 @@ dst_dir_path = pathlib.Path(sys.argv[2])
 
 assert dir_path.is_dir()
 
-ctx = Ctx()
 
-for py_path in dir_path.glob("**/*.py"):
+root_package = Package(owner=None, name=dir_path.name)
+
+non_py_file_paths = dict[pathlib.Path, bytes]()
+
+for py_path in dir_path.glob("**/*.*"):
     with open(str(py_path), "rb") as f:
         # Создание АСД
-        node: ast.Module = ast.parse(source=f.read())
+        bytes = f.read()
+        if py_path.suffix == ".py":
+            node: ast.Module = ast.parse(source=bytes)
+            path = py_path.relative_to(dir_path).with_suffix("").parts
+            package = root_package
 
-    module_name = py_path.relative_to(dir_path.parent).with_suffix("").parts
-    # if module_name[-1] == "__init__":
-    #    module_name = module_name[:-1]
-    module_name = ".".join(module_name)
+            while len(path) > 1:
+                package = package.get_or_add_package(name=path[0])
+                path = path[1:]
 
-    node_and_scope = (node, Module(name=module_name, node=node))
-
-    ctx.module_node_and_scope_by_name[module_name] = node_and_scope
-    if module_name.endswith(".__init__"):
-        ctx.module_node_and_scope_by_name[
-            module_name.removesuffix(".__init__")
-        ] = node_and_scope
+            package.add_module(name=path[0], **node.__dict__)
+        else:
+            non_py_file_paths[py_path.relative_to(dir_path)] = bytes
 
 shutil.rmtree(dst_dir_path, ignore_errors=True)
-dst_dir_path.mkdir(parents=True)
 
-for name, (node, scope) in ctx.module_node_and_scope_by_name.items():
-    if scope.translated_name is None:
-        scope.translated_name = next_name()
+from .transformer import Transformer  # noqa
+transformed_modules = set[Transformer]()
 
-        handle_statements(
-            ctx,
-            stmts=node.body,
-            scope=scope,
-            module=scope
-        )
+for node in root_package.walk():
+    Transformer(
+        node=node,
+        root_package=root_package,
+        transformed_modules=transformed_modules,
+        deferred=list()
+    ).visit(node)
 
-    # Преобразование АСД обратно в исходный код
-    # print()
-    # print("File", name, " -> ", scope.translated_name)
-    # print(ast.unparse(scope.node))
-    os.makedirs("result", exist_ok=True)
-    with open(dst_dir_path/f"{scope.translated_name}.py", "w") as f:
-        f.write(ast.unparse(node))
+print("\nresolving deferred\n")
+
+for t in transformed_modules:
+    t.resolve_deferred()
+
+
+# Получение обфусцированного имени.
+# По мере вызовов метода, возвращаются элементы последовательности:
+# a, b, c, ..., z, aa, ab, ..., az, ba, bb, ..., zz, aaa, ...,  и т.д.
+def next_name(_name_idx: list[int] = [0]) -> str:
+    name_chars = list()
+    name_idx: int = _name_idx[0]
+
+    while True:
+        name_chars.append(chr(ord('a') + (name_idx % 26)))
+        name_idx //= 26
+        if name_idx == 0:
+            break
+
+    _name_idx[0] += 1
+
+    return "obfuscated_" + ''.join(name_chars)
+
+
+transformed_names = set[UserString]()
+renamed_classes = set[ClassDef]()
+
+
+def handle_class(node: ClassDef):
+    if node in renamed_classes:
+        return
+
+    renamed_classes.add(node)
+    handle_any(node)
+
+    if node.name_ptr not in transformed_names:
+        node.name_ptr.data = next_name()
+        transformed_names.add(node.name_ptr)
+
+
+def handle_any(node: ClassDef | Module):
+    for name, g in members(node).items():
+        if isinstance(g, ClassDef):
+            handle_class(g)
+
+
+modules_to_move = set[Module]()
+
+for node in root_package.walk():
+    handle_any(node)
+    node.name_ptr.data = next_name()
+    if node.owner is not root_package:
+        modules_to_move.add(node)
+
+for m in modules_to_move:
+    m.move_to(root_package)
+
+
+for node in root_package.walk():
+    path = node.path()[1:]
+    path = "/".join(s.data for s in path)
+    ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
+    with open(dst_dir_path/f"{path}.py", "wb") as f:
+        f.write(ast.unparse(node).encode("utf-8"))
+
+for path, bytes in non_py_file_paths.items():
+    ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
+    with open(dst_dir_path/path, "wb") as f:
+        f.write(bytes)
