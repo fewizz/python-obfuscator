@@ -109,7 +109,7 @@ class alias(ast.AST):
 
     def __init__(
         self,
-        entity: "Module | Package | Name | ClassDef | FunctionDef | AsyncFunctionDef",  # noqa
+        entity: "Module | Package | ClassDef | FunctionDef | AsyncFunctionDef | Name",  # noqa
         asname: str | None
     ):
         self.entity = entity
@@ -133,7 +133,7 @@ class ImportFrom(ast.stmt):
 
     def from_where(self):
         _from = self.what[0].entity.owner
-        assert isinstance(_from, Module | Package)
+        assert isinstance(_from, Package | Module)
         return _from
 
     def _branch_path(self):
@@ -249,14 +249,28 @@ class AsyncFunctionDef(ast.AsyncFunctionDef):
         return o
 
 
+class arg(ast.arg):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @property
+    def arg(self):
+        return self.name_ptr.data
+
+    @arg.setter
+    def arg(self, value: str):
+        self.name_ptr = UserString(value)
+
+
 class Attribute(ast.expr):
 
     def __init__(
         self,
-        left: ast.expr | Package | Module | ClassDef | FunctionDef
-        | AsyncFunctionDef | Name,
-        right: str | UserString | Module | Package | ClassDef | FunctionDef
-        | Name | AsyncFunctionDef,
+        left: ast.expr | Package | Module | ClassDef
+        | FunctionDef | AsyncFunctionDef | Name | arg,
+        right: str | UserString | Package | Module | ClassDef
+        | FunctionDef | AsyncFunctionDef | Name | arg,
         ctx: ast.expr_context
     ):
         self.left = left
@@ -279,10 +293,11 @@ class Attribute(ast.expr):
     @property
     def value(self):
         e = self.left
-        if isinstance(e, Module) and e.name_ptr.data == "__init__":
-            e = e.owner
 
-        if isinstance(e, Name | Module | Package | ClassDef | FunctionDef):
+        if isinstance(
+            e,
+            Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name
+        ):
             return ast.Name(id=e.name_ptr.data, ctx=ast.Load())
 
         return e

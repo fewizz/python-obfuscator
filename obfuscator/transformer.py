@@ -2,7 +2,7 @@ import ast
 from collections import UserString
 from .types import (
     Module, Name, ClassDef, FunctionDef, AsyncFunctionDef,
-    ImportFrom, Package, alias, Attribute
+    ImportFrom, Package, Attribute, arg, alias
 )
 from .members import members
 
@@ -119,9 +119,23 @@ class Transformer(ast.NodeTransformer):
                 elif e is None:
                     init = _from_where.try_get_module("__init__")
                     assert isinstance(init, Module)
+                    Transformer(
+                        node=init,
+                        root_package=self.root_package,
+                        transformed_modules=self.handled_modules,
+                        deferred=list()
+                    ).visit(init)
                     _from_where = init
                 else:
                     assert isinstance(e, Package)
+                    for m in e.entries:
+                        if isinstance(m, Module):
+                            Transformer(
+                                node=m,
+                                root_package=self.root_package,
+                                transformed_modules=self.handled_modules,
+                                deferred=list()
+                            ).visit(m)
 
             if e is None:
                 assert isinstance(_from_where, Module)
@@ -136,12 +150,9 @@ class Transformer(ast.NodeTransformer):
                 scope = members(_from_where)
                 assert a.name in scope
 
-                # if a.name in scope:
                 e = scope[a.name]
-                # else:
-                #     e = _from_where.owner.get(name=a.name)
 
-            # assert e is not None
+            assert not isinstance(e, arg)
 
             what.append(alias(entity=e, asname=a.asname))
 
@@ -158,12 +169,9 @@ class Transformer(ast.NodeTransformer):
 
         if type(node.ctx) is ast.Store and node.id not in scope:
             scope[node.id] = new_node
-        else:
-            if node.id in scope:
-                e = scope[node.id]
-                if isinstance(e, Module) and e.name_ptr.data == "__init__":
-                    e = e.owner
-                new_node.name_ptr = e.name_ptr
+        elif node.id in scope:
+            e = scope[node.id]
+            new_node.name_ptr = e.name_ptr
 
         return new_node
 
@@ -171,17 +179,20 @@ class Transformer(ast.NodeTransformer):
         assert type(node) is ast.Attribute
         self.generic_visit(node)
 
-        scope = members(self.node)  # self.entities | self.globals
+        scope = members(self.node)
         left = node.value
         right = UserString(node.attr)
 
-        if isinstance(left, Name) and left.id in scope:
+        if (
+            isinstance(left, Name)
+            and left.id in scope
+            and not isinstance(scope[left.id], arg)
+        ):
             left = scope[left.id]
-            if not isinstance(left, Package) and not isinstance(left, Name):
+            if not isinstance(left, Name | arg):
                 left_scope = members(left)
                 if right.data in left_scope:
                     right = left_scope[right.data]
-            # assert isinstance(right, Name | Module | ClassDef | FunctionDef)
 
         elif (
             isinstance(left, Attribute)
@@ -190,9 +201,6 @@ class Transformer(ast.NodeTransformer):
             right_scope = members(left.right)
             if right.data in right_scope:
                 right = right_scope[right.data]
-
-        # if isinstance(left, Module):
-        #    attr_name = members(left)[node.attr].name_ptr
 
         new_node = Attribute(left=left, right=right, ctx=node.ctx)
         return new_node
@@ -246,6 +254,11 @@ class Transformer(ast.NodeTransformer):
 
         return node
 
+    def visit_arg(self, node: ast.arg):
+        assert isinstance(node, ast.arg)
+        self.generic_visit(node)
+        return arg(**node.__dict__)
+
     def generic_visit(self, node):
         for field, old_value in ast.iter_fields(node):
             if isinstance(old_value, list):
@@ -270,3 +283,33 @@ class Transformer(ast.NodeTransformer):
                 else:
                     setattr(node, field, new_node)
         return node
+
+    # different order of visiting
+    def visit_SetComp(self, node: ast.SetComp):
+        assert isinstance(node, ast.SetComp)
+        new_node = ast.SetComp(**node.__dict__)
+        new_node.generators[:] = (self.visit(g) for g in new_node.generators)
+        new_node.elt = self.visit(new_node.elt)
+        return new_node
+
+    def visit_ListComp(self, node: ast.ListComp):
+        assert isinstance(node, ast.ListComp)
+        new_node = ast.ListComp(**node.__dict__)
+        new_node.generators[:] = (self.visit(g) for g in new_node.generators)
+        new_node.elt = self.visit(new_node.elt)
+        return new_node
+
+    def visit_DictComp(self, node: ast.DictComp):
+        assert isinstance(node, ast.DictComp)
+        new_node = ast.DictComp(**node.__dict__)
+        new_node.generators[:] = (self.visit(g) for g in new_node.generators)
+        new_node.key = self.visit(new_node.key)
+        new_node.value = self.visit(new_node.value)
+        return new_node
+
+    def visit_Assign(self, node: ast.Assign):
+        assert isinstance(node, ast.Assign)
+        new_node = ast.Assign(**node.__dict__)
+        new_node.value = self.visit(new_node.value)
+        new_node.targets[:] = (self.visit(t) for t in new_node.targets)
+        return new_node

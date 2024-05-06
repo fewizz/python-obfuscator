@@ -2,8 +2,9 @@ import sys
 import pathlib
 import ast
 import shutil
-from collections import UserString
-from .types import Package, Module, ClassDef
+from .types import (
+    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name, arg
+)
 from .members import members
 
 # Первый аргумент программы - файл исходного кода
@@ -57,6 +58,9 @@ for t in transformed_modules:
     t.resolve_deferred()
 
 
+print("\nrenaming\n")
+
+
 # Получение обфусцированного имени.
 # По мере вызовов метода, возвращаются элементы последовательности:
 # a, b, c, ..., z, aa, ab, ..., az, ba, bb, ..., zz, aaa, ...,  и т.д.
@@ -75,38 +79,43 @@ def next_name(_name_idx: list[int] = [0]) -> str:
     return "obfuscated_" + ''.join(name_chars)
 
 
-transformed_names = set[UserString]()
-renamed_classes = set[ClassDef]()
+renamed_nodes = set[
+    Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name | arg
+]()
 
 
-def handle_class(node: ClassDef):
-    if node in renamed_classes:
+def handle_node(
+    node: Package | ClassDef | Module | FunctionDef | AsyncFunctionDef
+    | Name | arg
+):
+    if node in renamed_nodes:
         return
+    renamed_nodes.add(node)
 
-    renamed_classes.add(node)
-    handle_any(node)
-
-    if node.name_ptr not in transformed_names:
+    if isinstance(node, Module | ClassDef):
+        if not (
+            isinstance(node, Module) and node.name_ptr.data == "__init__"
+        ):
+            node.name_ptr.data = next_name()
+        for m in members(node).values():
+            handle_node(m)
+    if isinstance(node, FunctionDef | AsyncFunctionDef):
+        for m in members(node).values():
+            handle_node(m)
+    if (
+        #  (isinstance(node, Name) and type(node.ctx) is ast.Store)
+        #  or
+        isinstance(node, Package)
+    ):
         node.name_ptr.data = next_name()
-        transformed_names.add(node.name_ptr)
 
-
-def handle_any(node: ClassDef | Module):
-    for name, g in members(node).items():
-        if isinstance(g, ClassDef):
-            handle_class(g)
-
-
-modules_to_move = set[Module]()
 
 for node in root_package.walk():
-    handle_any(node)
-    node.name_ptr.data = next_name()
-    if node.owner is not root_package:
-        modules_to_move.add(node)
+    # Обработка пакета модуля
+    handle_node(node.owner)
 
-for m in modules_to_move:
-    m.move_to(root_package)
+    # Обработка модуля
+    handle_node(node)
 
 
 for node in root_package.walk():
@@ -117,6 +126,8 @@ for node in root_package.walk():
         f.write(ast.unparse(node).encode("utf-8"))
 
 for path, bytes in non_py_file_paths.items():
+    if path.suffix in (".pyc",):
+        continue
     ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
     with open(dst_dir_path/path, "wb") as f:
         f.write(bytes)
