@@ -285,6 +285,14 @@ class Transformer(ast.NodeTransformer):
         return node
 
     # different order of visiting
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp):
+        assert isinstance(node, ast.GeneratorExp)
+        new_node = ast.GeneratorExp(**node.__dict__)
+        new_node.generators[:] = (self.visit(g) for g in new_node.generators)
+        new_node.elt = self.visit(new_node.elt)
+        return new_node
+
     def visit_SetComp(self, node: ast.SetComp):
         assert isinstance(node, ast.SetComp)
         new_node = ast.SetComp(**node.__dict__)

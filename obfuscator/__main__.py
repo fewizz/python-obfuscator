@@ -103,8 +103,11 @@ def handle_node(
         for m in members(node).values():
             handle_node(m)
     if (
-        #  (isinstance(node, Name) and type(node.ctx) is ast.Store)
-        #  or
+        (
+            isinstance(node, Name)
+            and isinstance(node.owner, FunctionDef | AsyncFunctionDef)
+        )
+        or
         isinstance(node, Package)
     ):
         node.name_ptr.data = next_name()

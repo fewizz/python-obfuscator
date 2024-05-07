@@ -36,9 +36,12 @@ def members(
     class Visitor(ast.NodeVisitor):
 
         def visit_Name(self, node):
-            if isinstance(node, Name):
-                if type(node.ctx) is ast.Store:
-                    result[node.name_ptr.data] = node
+            if (
+                isinstance(node, Name)
+                and type(node.ctx) is ast.Store
+                and node.name_ptr.data not in result
+            ):
+                result[node.name_ptr.data] = node
 
         def visit_ImportFrom(self, node):
             if isinstance(node, ImportFrom):
