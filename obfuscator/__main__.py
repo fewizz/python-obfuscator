@@ -3,7 +3,8 @@ import pathlib
 import ast
 import shutil
 from .types import (
-    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name, arg
+    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name,
+    arg
 )
 from .members import members
 
@@ -65,18 +66,20 @@ print("\nrenaming\n")
 # По мере вызовов метода, возвращаются элементы последовательности:
 # a, b, c, ..., z, aa, ab, ..., az, ba, bb, ..., zz, aaa, ...,  и т.д.
 def next_name(_name_idx: list[int] = [0]) -> str:
-    name_chars = list()
-    name_idx: int = _name_idx[0]
+    # name_chars = list()
+    # name_idx: int = _name_idx[0]
 
-    while True:
-        name_chars.append(chr(ord('a') + (name_idx % 26)))
-        name_idx //= 26
-        if name_idx == 0:
-            break
+    # while True:
+    #     name_chars.append(chr(ord('a') + (name_idx % 26)))
+    #     name_idx //= 26
+    #     if name_idx == 0:
+    #         break
 
-    _name_idx[0] += 1
+    # _name_idx[0] += 1
 
-    return "obfuscated_" + ''.join(name_chars)
+    # return "obfuscated_" + ''.join(name_chars)
+    import uuid
+    return "_" + str(uuid.uuid4()).replace("-", "_")
 
 
 renamed_nodes = set[
@@ -120,6 +123,7 @@ for node in root_package.walk():
     # Обработка модуля
     handle_node(node)
 
+print("\nwriting\n")
 
 for node in root_package.walk():
     path = node.path()[1:]
