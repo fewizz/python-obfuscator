@@ -1,140 +1,76 @@
 import sys
-import pathlib
+from pathlib import Path
 import ast
 import shutil
-from .types import (
-    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name,
-    arg
-)
-from .members import members
+from .types import Package
+from .link import link
+from .obfuscate import obfuscate
 
 # Первый аргумент программы - файл исходного кода
 if len(sys.argv) <= 1:
     print("usage: python ast_obfuscate.py `.py file_to_obfuscate`")
     exit(1)
 
-dir_path = pathlib.Path(sys.argv[1])
-dst_dir_path = pathlib.Path(sys.argv[2])
+# Стадия 1
 
+# Исходная директория
+dir_path = Path(sys.argv[1])
 assert dir_path.is_dir()
 
+# Конечная директория
+dst_dir_path = Path(sys.argv[2])
 
+# Корневой пакет
 root_package = Package(owner=None, name=dir_path.name)
 
-non_py_file_paths = dict[pathlib.Path, bytes]()
+for file_path in dir_path.glob("**/*.*"):
+    if file_path.suffix == ".py":
+        with open(str(file_path), "rb") as f:
+            # Создание АСД
+            bytes = f.read()
+            node = ast.parse(source=bytes)
+    else:
+        node = None
 
-for py_path in dir_path.glob("**/*.*"):
-    with open(str(py_path), "rb") as f:
-        # Создание АСД
-        bytes = f.read()
-        if py_path.suffix == ".py":
-            node: ast.Module = ast.parse(source=bytes)
-            path = py_path.relative_to(dir_path).with_suffix("").parts
-            package = root_package
+    path_parts = file_path.relative_to(dir_path).with_suffix("").parts
+    package = root_package
 
-            while len(path) > 1:
-                package = package.get_or_add_package(name=path[0])
-                path = path[1:]
+    while len(path_parts) > 1:
+        package = package.get_or_add_package(name=path_parts[0])
+        path_parts = path_parts[1:]
 
-            package.add_module(name=path[0], **node.__dict__)
-        else:
-            non_py_file_paths[py_path.relative_to(dir_path)] = bytes
+    if node is not None:
+        assert len(path_parts) > 0
+        package.add_module(name=path_parts[0], **node.__dict__)
+    else:
+        package.other_files.add(file_path)
 
-shutil.rmtree(dst_dir_path, ignore_errors=True)
+# Стадия 2
+link(root_package)
 
-from .transformer import Transformer  # noqa
-transformed_modules = set[Transformer]()
+# Стадия 3
+obfuscate(root_package)
 
-for node in root_package.walk():
-    Transformer(
-        node=node,
-        root_package=root_package,
-        transformed_modules=transformed_modules,
-        deferred=list()
-    ).visit(node)
-
-print("\nresolving deferred\n")
-
-for t in transformed_modules:
-    t.resolve_deferred()
-
-
-print("\nrenaming\n")
-
-
-# Получение обфусцированного имени.
-# По мере вызовов метода, возвращаются элементы последовательности:
-# a, b, c, ..., z, aa, ab, ..., az, ba, bb, ..., zz, aaa, ...,  и т.д.
-def next_name(_name_idx: list[int] = [0]) -> str:
-    # name_chars = list()
-    # name_idx: int = _name_idx[0]
-
-    # while True:
-    #     name_chars.append(chr(ord('a') + (name_idx % 26)))
-    #     name_idx //= 26
-    #     if name_idx == 0:
-    #         break
-
-    # _name_idx[0] += 1
-
-    # return "obfuscated_" + ''.join(name_chars)
-    import uuid
-    return "_" + str(uuid.uuid4()).replace("-", "_")
-
-
-renamed_nodes = set[
-    Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name | arg
-]()
-
-
-def handle_node(
-    node: Package | ClassDef | Module | FunctionDef | AsyncFunctionDef
-    | Name | arg
-):
-    if node in renamed_nodes:
-        return
-    renamed_nodes.add(node)
-
-    if isinstance(node, Module | ClassDef):
-        if not (
-            isinstance(node, Module) and node.name_ptr.data == "__init__"
-        ):
-            node.name_ptr.data = next_name()
-        for m in members(node).values():
-            handle_node(m)
-    if isinstance(node, FunctionDef | AsyncFunctionDef):
-        for m in members(node).values():
-            handle_node(m)
-    if (
-        (
-            isinstance(node, Name)
-            and isinstance(node.owner, FunctionDef | AsyncFunctionDef)
-        )
-        or
-        isinstance(node, Package)
-    ):
-        node.name_ptr.data = next_name()
-
-
-for node in root_package.walk():
-    # Обработка пакета модуля
-    handle_node(node.owner)
-
-    # Обработка модуля
-    handle_node(node)
+# Стадия 4
 
 print("\nwriting\n")
 
-for node in root_package.walk():
-    path = node.path()[1:]
-    path = "/".join(s.data for s in path)
-    ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
-    with open(dst_dir_path/f"{path}.py", "wb") as f:
-        f.write(ast.unparse(node).encode("utf-8"))
+# Удаление конечной директории, если она существует
+shutil.rmtree(dst_dir_path, ignore_errors=True)
 
-for path, bytes in non_py_file_paths.items():
-    if path.suffix in (".pyc",):
-        continue
-    ((dst_dir_path/path).parent).mkdir(parents=True, exist_ok=True)
-    with open(dst_dir_path/path, "wb") as f:
+# Удаление создание директорий и поддиректорий, копиравание не ".py" файлов
+for p in root_package.walk_packages():
+    dst_path = dst_dir_path / "/".join(s.data for s in p.parts()[1:])
+    dst_path.mkdir(parents=True, exist_ok=True)
+
+    for other_file in p.other_files:
+        shutil.copyfile(other_file, dst_path/other_file.name)
+
+# Обратное преобразование АСД в исходный код, запись в файл
+for node in root_package.walk():
+    path_parts = node.parts()[1:]
+    path_parts = "/".join(s.data for s in path_parts)
+
+    with open(dst_dir_path/f"{path_parts}.py", "wb") as f:
+        bytes = ast.unparse(node).encode("utf-8")
         f.write(bytes)

@@ -1,4 +1,5 @@
 import ast
+from pathlib import Path
 from typing import Generator
 from collections import UserString
 
@@ -28,6 +29,7 @@ class Package:
         self.owner = owner
         self.name_ptr = UserString(name)
         self.entries = set[Package | Module]()
+        self.other_files = set[Path]()
 
     def add_module(self, name: str, *args, **kwargs):
         assert next(
@@ -65,9 +67,9 @@ class Package:
             None
         )
 
-    def path(self) -> list[UserString]:
+    def parts(self) -> list[UserString]:
         if self.owner is not None:
-            result = self.owner.path()
+            result = self.owner.parts()
         else:
             result = list()
         result.append(self.name_ptr)
@@ -79,6 +81,12 @@ class Package:
                 yield e
             else:
                 yield from e.walk()
+
+    def walk_packages(self) -> Generator["Package", None, None]:
+        yield self
+        for e in self.entries:
+            if isinstance(e, Package):
+                yield from e.walk_packages()
 
 
 class Module(ast.Module):
@@ -93,8 +101,8 @@ class Module(ast.Module):
     def owning_module(self):
         return self
 
-    def path(self):
-        return self.owner.path() + [self.name_ptr]
+    def parts(self):
+        return self.owner.parts() + [self.name_ptr]
 
     def move_to(self, package: Package):
         prev_owner = self.owner
@@ -137,8 +145,8 @@ class ImportFrom(ast.stmt):
         return _from
 
     def _branch_path(self):
-        owner_path = self.owner.owning_module().path()
-        from_path = self.from_where().path()
+        owner_path = self.owner.owning_module().parts()
+        from_path = self.from_where().parts()
 
         result = list[UserString]()
         for b, f in zip(owner_path, from_path):
@@ -151,14 +159,14 @@ class ImportFrom(ast.stmt):
     @property
     def level(self):
         branch_path_len = len(self._branch_path())
-        owner_path_len = len(self.owner.owning_module().path())
+        owner_path_len = len(self.owner.owning_module().parts())
         diff = owner_path_len - branch_path_len
         assert diff >= 0
         return diff
 
     @property
     def module(self):
-        from_path = self.from_where().path()
+        from_path = self.from_where().parts()
         branch_path = self._branch_path()
         result = from_path[len(branch_path):]
         return ".".join(s.data for s in result) if len(result) else None

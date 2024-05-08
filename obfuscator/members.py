@@ -11,13 +11,16 @@ def members(
     str,
     Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name | arg
 ]:
+    # Если сущность - пакет, возвращаем список его модулей
     if isinstance(node, Package):
         result = {e.name_ptr.data: e for e in node.entries}
+        # если пакет содержит модуль __init__, включаем его сущности
         if "__init__" in result:
             init_members = members(result["__init__"])
             result.update(init_members)  # type: ignore
         return result  # type: ignore
 
+    # Включаем елементы родительской сущности, если необходимо
     if (
         node.owner is not None
         and isinstance(
@@ -33,9 +36,12 @@ def members(
             | Name | arg
         ]()
 
+    # Визитор, обходящий все дерево и включающий все сущности,
+    # входящие в область видимости данной сущности
     class Visitor(ast.NodeVisitor):
 
         def visit_Name(self, node):
+            assert isinstance(node, Name | ast.Name)
             if (
                 isinstance(node, Name)
                 and type(node.ctx) is ast.Store
@@ -44,6 +50,7 @@ def members(
                 result[node.name_ptr.data] = node
 
         def visit_ImportFrom(self, node):
+            assert isinstance(node, ImportFrom | ast.ImportFrom)
             if isinstance(node, ImportFrom):
                 for what in node.what:
                     if what.asname is not None:
@@ -52,26 +59,21 @@ def members(
                         name = what.entity.name_ptr.data
                     entity = what.entity
                     result[name] = entity
-            else:
-                assert isinstance(node, ast.ImportFrom)
 
         def visit_ClassDef(self, node):
+            assert isinstance(node, ClassDef | ast.ClassDef)
             if isinstance(node, ClassDef):
                 result[node.name] = node
-            else:
-                assert isinstance(node, ast.ClassDef)
 
         def visit_FunctionDef(self, node):
+            assert isinstance(node, FunctionDef | ast.FunctionDef)
             if isinstance(node, FunctionDef):
                 result[node.name] = node
-            else:
-                assert isinstance(node, ast.FunctionDef)
 
         def visit_AsyncFunctionDef(self, node):
+            assert isinstance(node, AsyncFunctionDef | ast.AsyncFunctionDef)
             if isinstance(node, AsyncFunctionDef):
                 result[node.name] = node
-            else:
-                assert isinstance(node, ast.AsyncFunctionDef)
 
         def visit_arg(self, node: arg):
             if isinstance(node, arg):

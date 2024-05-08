@@ -8,32 +8,55 @@ from .members import members
 
 
 level = 0
-transforming = set[Module]()
 
 
-class Transformer(ast.NodeTransformer):
+class Ctx:
+
+    def __init__(self, root_package: Package):
+        self.root_package = root_package
+        self.transformed_modules = set[Linker]()
+        self.transforming_modules = set[Linker]()
+
+
+def link(root_package):
+    ctx = Ctx(root_package=root_package)
+
+    for node in root_package.walk():
+        Linker(
+            node=node,
+            ctx=ctx
+        ).visit(node)
+
+    print("\nresolving deferred\n")
+
+    for t in ctx.transformed_modules:
+        t.resolve_deferred()
+
+
+class Linker(ast.NodeTransformer):
+
     def __init__(
         self,
         node: Module | ClassDef | FunctionDef | AsyncFunctionDef,
-        root_package: Package,
-        transformed_modules: set["Transformer"],
-        deferred: list[FunctionDef | AsyncFunctionDef]
+        ctx: Ctx,
+        deferred: list[FunctionDef | AsyncFunctionDef] | None = None
     ):
         self.node = node
-        self.root_package = root_package
-        self.handled_modules = transformed_modules
+        self.ctx = ctx
+        if deferred is None:
+            deferred = list[FunctionDef | AsyncFunctionDef]()
         self.deferred = deferred
 
     def visit_Module(self, node: Module):
         global level
 
-        full_name = '.'.join(p.data for p in node.path())
-        if node in (t.node for t in self.handled_modules):
+        full_name = '.'.join(p.data for p in node.parts())
+        if node in (t.node for t in self.ctx.transformed_modules):
             print(f"{'  '*level}skipping module \"{full_name}\"")
             return node
 
-        assert node not in transforming
-        transforming.add(node)
+        assert node not in self.ctx.transforming_modules
+        self.ctx.transforming_modules.add(self)
 
         assert self.node is node
 
@@ -42,7 +65,8 @@ class Transformer(ast.NodeTransformer):
 
         self.generic_visit(node)
 
-        self.handled_modules.add(self)
+        self.ctx.transforming_modules.remove(self)
+        self.ctx.transformed_modules.add(self)
 
         level -= 1
 
@@ -52,16 +76,15 @@ class Transformer(ast.NodeTransformer):
         assert isinstance(self.node, Module)
 
         global level
-        full_name = '.'.join(p.data for p in self.node.path())
+        full_name = '.'.join(p.data for p in self.node.parts())
 
         print(f"{'  '*level}module (deferred) \"{full_name}\"")
         level += 1
 
         for deferred in self.deferred:
-            Transformer(
+            Linker(
                 node=deferred,
-                root_package=self.root_package,
-                transformed_modules=self.handled_modules,
+                ctx=self.ctx,
                 deferred=self.deferred
             ).visit(deferred)
 
@@ -83,9 +106,9 @@ class Transformer(ast.NodeTransformer):
             path = node.module.split(".")
             if (
                 from_where is None and
-                path[0] == self.root_package.name_ptr.data
+                path[0] == self.ctx.root_package.name_ptr.data
             ):
-                from_where = self.root_package
+                from_where = self.ctx.root_package
                 path = path[1:]
 
             if from_where is None:
@@ -110,42 +133,22 @@ class Transformer(ast.NodeTransformer):
                 e = _from_where.try_get(a.name)
 
                 if isinstance(e, Module):
-                    Transformer(
-                        node=e,
-                        root_package=self.root_package,
-                        transformed_modules=self.handled_modules,
-                        deferred=list()
-                    ).visit(e)
+                    Linker(node=e, ctx=self.ctx).visit(e)
                 elif e is None:
                     init = _from_where.try_get_module("__init__")
                     assert isinstance(init, Module)
-                    Transformer(
-                        node=init,
-                        root_package=self.root_package,
-                        transformed_modules=self.handled_modules,
-                        deferred=list()
-                    ).visit(init)
+                    Linker(node=init, ctx=self.ctx).visit(init)
                     _from_where = init
                 else:
                     assert isinstance(e, Package)
                     for m in e.entries:
                         if isinstance(m, Module):
-                            Transformer(
-                                node=m,
-                                root_package=self.root_package,
-                                transformed_modules=self.handled_modules,
-                                deferred=list()
-                            ).visit(m)
+                            Linker(node=m, ctx=self.ctx).visit(m)
 
             if e is None:
                 assert isinstance(_from_where, Module)
 
-                Transformer(
-                    node=_from_where,
-                    root_package=self.root_package,
-                    transformed_modules=self.handled_modules,
-                    deferred=list()
-                ).visit(_from_where)
+                Linker(node=_from_where, ctx=self.ctx).visit(_from_where)
 
                 scope = members(_from_where)
                 assert a.name in scope
@@ -214,11 +217,8 @@ class Transformer(ast.NodeTransformer):
 
         node = ClassDef(owner=self.node, **node.__dict__)
 
-        Transformer(
-            node=node,
-            root_package=self.root_package,
-            transformed_modules=self.handled_modules,
-            deferred=self.deferred
+        Linker(
+            node=node, ctx=self.ctx, deferred=self.deferred
         ).generic_visit(node)
 
         level -= 1
