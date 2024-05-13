@@ -24,23 +24,33 @@ class Name(ast.expr):
 
 
 class Package:
+    """Абстракция пакета модулей"""
 
     def __init__(self, owner: "Package | None", name: str):
+        """Args:
+            owner: Если есть родитель, пакет считается подпакетом
+            name: Имя пакета"""
         self.owner = owner
         self.name_ptr = UserString(name)
-        self.entries = set[Package | Module]()
-        self.other_files = set[Path]()
 
-    def add_module(self, name: str, *args, **kwargs):
+        self.entries = set[Package | Module]()
+        """Содержащиеся в пакете модули или подпакеты"""
+
+        self.other_files = set[Path]()
+        """Иные файлы"""
+
+    def add_module(self, name: str, node: ast.Module):
+        """Создает, добавляет и возвращает модуль с именем name"""
         assert next(
             (e for e in self.entries if e.name_ptr == name),
             None
         ) is None
-        m = Module(owner=self, name=name, *args, **kwargs)
+        m = Module(owner=self, name=name, **node.__dict__)
         self.entries.add(m)
         return m
 
     def try_get_module(self, name: str):
+        """Возвращает модуль, либо None"""
         return next(
             (
                 e for e in self.entries
@@ -50,6 +60,7 @@ class Package:
         )
 
     def get_or_add_package(self, name: str):
+        """Возможно создает, и возвращает подпакет с именем name"""
         p = self.try_get(name)
         if p is not None:
             assert isinstance(p, Package)
@@ -59,6 +70,7 @@ class Package:
         return p
 
     def get(self, name: str):
+        """Получение подпакета или модуля по имени"""
         return next(e for e in self.entries if e.name_ptr == name)
 
     def try_get(self, name: str):
@@ -68,6 +80,8 @@ class Package:
         )
 
     def parts(self) -> list[UserString]:
+        """Возвращает в виде списка имена пакетов по иерархии,
+        начиная с корневого пакета"""
         if self.owner is not None:
             result = self.owner.parts()
         else:
@@ -76,6 +90,7 @@ class Package:
         return result
 
     def walk(self) -> Generator["Module", None, None]:
+        """Рекурсивное получение всех модулей, и модулей подпакетов"""
         for e in self.entries:
             if isinstance(e, Module):
                 yield e

@@ -5,21 +5,7 @@ from .members import members
 
 
 # Получение обфусцированного имени.
-# По мере вызовов метода, возвращаются элементы последовательности:
-# a, b, c, ..., z, aa, ab, ..., az, ba, bb, ..., zz, aaa, ...,  и т.д.
-def next_name(_name_idx: list[int] = [0]) -> str:
-    # name_chars = list()
-    # name_idx: int = _name_idx[0]
-
-    # while True:
-    #     name_chars.append(chr(ord('a') + (name_idx % 26)))
-    #     name_idx //= 26
-    #     if name_idx == 0:
-    #         break
-
-    # _name_idx[0] += 1
-
-    # return "obfuscated_" + ''.join(name_chars)
+def next_obfuscated_name() -> str:
     import uuid
     return "_" + str(uuid.uuid4()).replace("-", "_")
 
@@ -33,35 +19,35 @@ def handle_node(
     node: Package | ClassDef | Module | FunctionDef | AsyncFunctionDef
     | Name | arg
 ):
+    # Вершина уже обрабатывалась, пропуск
     if node in renamed_nodes:
         return
     renamed_nodes.add(node)
 
-    if isinstance(node, Module | ClassDef):
-        if not (
-            isinstance(node, Module) and node.name_ptr.data == "__init__"
-        ):
-            node.name_ptr.data = next_name()
-        for m in members(node).values():
-            handle_node(m)
-    if isinstance(node, FunctionDef | AsyncFunctionDef):
-        for m in members(node).values():
-            handle_node(m)
-    if (
-        (
-            isinstance(node, Name)
-            and isinstance(node.owner, FunctionDef | AsyncFunctionDef)
-        )
-        or
-        isinstance(node, Package)
+    # 1. Обфускация имени
+
+    if (  # Если вершина есть пакет, класс или переменная
+        isinstance(node, Package | ClassDef | Name)
+    ) or (  # , либо модуль, кроме "__init__",
+        isinstance(node, Module) and not node.name_ptr.data == "__init__"
+    ) or (  # , либо функция, определенная в модуле или другой функции
+        isinstance(node, FunctionDef | AsyncFunctionDef)
+        and isinstance(node.owner, Module | FunctionDef | AsyncFunctionDef)
     ):
-        node.name_ptr.data = next_name()
+        # , то обфусцировать имя
+        node.name_ptr.data = next_obfuscated_name()
+
+    #  2. Обфускация дочерних вершин
+
+    if not isinstance(node, Name | arg):
+        for m in members(node).values():
+            handle_node(m)
 
 
 def obfuscate(root_package: Package):
     for node in root_package.walk():
-        # Обработка пакета модуля
+        # Обработка пакета модуля (тип Package)
         handle_node(node.owner)
 
-        # Обработка модуля
+        # Обработка самого модуля (тип Module)
         handle_node(node)
