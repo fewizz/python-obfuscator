@@ -24,8 +24,12 @@ dst_dir_path = Path(sys.argv[2])
 root_package = Package(owner=None, name=src_dir_path.name)
 # и его наполнение
 for file_path in src_dir_path.glob("**/*.*"):
+
     # Получение имен всех подпакетов
     parts = file_path .relative_to(src_dir_path).with_suffix("").parts
+
+    if "__pycache__" in parts:
+        continue
 
     # Поиск (или создание) соответствующего подпакета
     package = root_package

@@ -1,5 +1,5 @@
 from .types import (
-    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name, arg
+    Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name, arg, alias
 )
 from .members import members
 
@@ -10,28 +10,26 @@ def next_obfuscated_name() -> str:
     return "_" + str(uuid.uuid4()).replace("-", "_")
 
 
-renamed_nodes = set[
-    Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name | arg
-]()
+handled_nodes = set()
 
 
 def handle_node(
     node: Package | ClassDef | Module | FunctionDef | AsyncFunctionDef
-    | Name | arg
+    | Name | arg | alias
 ):
     # Вершина уже обрабатывалась, пропуск
-    if node in renamed_nodes:
+    if node in handled_nodes:
         return
-    renamed_nodes.add(node)
+    handled_nodes.add(node)
 
     # 1. Обфускация имени
 
-    if (  # Если вершина есть пакет, класс или переменная
-        isinstance(node, Package | ClassDef | Name)
+    if (  # Если вершина есть пакет или класс
+        isinstance(node, Package | ClassDef)
     ) or (  # , либо модуль, кроме "__init__",
         isinstance(node, Module) and not node.name_ptr.data == "__init__"
     ) or (  # , либо функция, определенная в модуле или другой функции
-        isinstance(node, FunctionDef | AsyncFunctionDef)
+        isinstance(node, FunctionDef | AsyncFunctionDef | Name)
         and isinstance(node.owner, Module | FunctionDef | AsyncFunctionDef)
     ):
         # , то обфусцировать имя
@@ -39,7 +37,7 @@ def handle_node(
 
     #  2. Обфускация дочерних вершин
 
-    if not isinstance(node, Name | arg):
+    if not isinstance(node, Name | arg | alias):
         for m in members(node).values():
             handle_node(m)
 

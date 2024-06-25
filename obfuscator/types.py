@@ -127,35 +127,43 @@ class Module(ast.Module):
         package.entries.add(self)
 
 
-class alias(ast.AST):
-    asname: UserString | None
-
-    def __init__(
-        self,
-        entity: "Module | Package | ClassDef | FunctionDef | AsyncFunctionDef | Name",  # noqa
-        asname: str | None
-    ):
-        self.entity = entity
-        self.asname = UserString(asname) if asname is not None else None
-
-    @property
-    def name(self):
-        return self.entity.name_ptr.data
-
-
-class ImportFrom(ast.stmt):
-    what: list[alias]
+class alias:
 
     def __init__(
         self,
         owner: "Module | ClassDef | FunctionDef | AsyncFunctionDef",
-        what: list[alias]
+        entity: "Module | Package | ClassDef | FunctionDef | AsyncFunctionDef | Name",  # noqa
+        asname: str
+    ):
+        self.owner = owner
+        self.entity = entity
+        self.name_ptr = UserString(asname)
+
+    @property
+    def name(self):
+        return self.name_ptr.data
+
+    @property
+    def asname(self):
+        return None
+
+
+class ImportFrom(ast.stmt):
+
+    def __init__(
+        self,
+        owner: "Module | ClassDef | FunctionDef | AsyncFunctionDef",
+        what: list["alias | Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name"]  # noqa
     ):
         self.owner = owner
         self.what = what
 
     def from_where(self):
-        _from = self.what[0].entity.owner
+        first = self.what[0]
+        if isinstance(first, alias):
+            _from = first.entity.owner
+        else:
+            _from = first.owner
         assert isinstance(_from, Package | Module)
         return _from
 
@@ -184,11 +192,22 @@ class ImportFrom(ast.stmt):
         from_path = self.from_where().parts()
         branch_path = self._branch_path()
         result = from_path[len(branch_path):]
-        return ".".join(s.data for s in result) if len(result) else None
+        result = ".".join(s.data for s in result) if len(result) else None
+        return result
 
     @property
     def names(self):
-        return self.what
+        return [
+            ast.alias(
+                name=e.name_ptr.data,
+                asname=None
+            ) if not isinstance(e, alias)
+            else ast.alias(
+                name=e.entity.name_ptr.data,
+                asname=e.name_ptr.data
+            )
+            for e in self.what
+        ]
 
 
 class ClassDef(ast.ClassDef):
@@ -291,9 +310,9 @@ class Attribute(ast.expr):
     def __init__(
         self,
         left: ast.expr | Package | Module | ClassDef
-        | FunctionDef | AsyncFunctionDef | Name | arg,
+        | FunctionDef | AsyncFunctionDef | Name | arg | alias,
         right: str | UserString | Package | Module | ClassDef
-        | FunctionDef | AsyncFunctionDef | Name | arg,
+        | FunctionDef | AsyncFunctionDef | Name | arg | alias,
         ctx: ast.expr_context
     ):
         self.left = left

@@ -1,7 +1,7 @@
 import ast
 from .types import (
     Package, Module, ClassDef, FunctionDef, AsyncFunctionDef, Name,
-    ImportFrom, arg
+    ImportFrom, arg, alias
 )
 
 
@@ -9,7 +9,8 @@ def members(
     node: Package | Module | ClassDef | FunctionDef | AsyncFunctionDef
 ) -> dict[
     str,
-    Package | Module | ClassDef | FunctionDef | AsyncFunctionDef | Name | arg
+    Package | Module | ClassDef
+    | FunctionDef | AsyncFunctionDef | Name | arg | alias
 ]:
     # Если сущность - пакет, возвращаем список его модулей
     if isinstance(node, Package):
@@ -33,7 +34,7 @@ def members(
         result = dict[
             str,
             Package | Module | ClassDef | FunctionDef | AsyncFunctionDef
-            | Name | arg
+            | Name | arg | alias
         ]()
 
     # Визитор, обходящий все дерево и включающий все сущности,
@@ -53,12 +54,7 @@ def members(
             assert isinstance(node, ImportFrom | ast.ImportFrom)
             if isinstance(node, ImportFrom):
                 for what in node.what:
-                    if what.asname is not None:
-                        name = what.asname.data
-                    else:
-                        name = what.entity.name_ptr.data
-                    entity = what.entity
-                    result[name] = entity
+                    result[what.name_ptr.data] = what
 
         def visit_ClassDef(self, node):
             assert isinstance(node, ClassDef | ast.ClassDef)

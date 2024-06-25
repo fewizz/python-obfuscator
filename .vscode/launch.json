@@ -15,6 +15,19 @@
 			"justMyCode": false
 		},
 		{
+			"name": "Obfuscate UG",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "obfuscator",
+			"console": "integratedTerminal",
+			"cwd": "${workspaceFolder}",
+			"args": [
+				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/user_gate",
+				"C:/msys64/home/Aidar.Khazeev/firewall-migration-tool/connectors/user_gate_obfuscated"
+			],
+			"justMyCode": false
+		},
+		{
 			"name": "Pytest",
 			"type": "debugpy",
 			"request": "launch",

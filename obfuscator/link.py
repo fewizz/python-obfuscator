@@ -122,7 +122,10 @@ class Linker(ast.NodeTransformer):
         if from_where is None:
             return node
 
-        what = list[alias]()
+        what = list[
+            alias | Package | Module | ClassDef
+            | FunctionDef | AsyncFunctionDef | Name
+        ]()
 
         for a in node.names:
             _from_where = from_where
@@ -155,9 +158,16 @@ class Linker(ast.NodeTransformer):
 
                 e = scope[a.name]
 
-            assert not isinstance(e, arg)
+            assert not isinstance(e, (arg, alias))
 
-            what.append(alias(entity=e, asname=a.asname))
+            if a.asname is not None:
+                e = alias(
+                    owner=self.node,
+                    entity=e,
+                    asname=a.asname
+                )
+
+            what.append(e)
 
         return ImportFrom(
             owner=self.node,
@@ -186,17 +196,18 @@ class Linker(ast.NodeTransformer):
         left = node.value
         right = UserString(node.attr)
 
-        if (
-            isinstance(left, Name)
-            and left.id in scope
-            and not isinstance(scope[left.id], arg)
-        ):
-            left = scope[left.id]
-            if not isinstance(left, Name | arg):
-                left_scope = members(left)
-                if right.data in left_scope:
-                    right = left_scope[right.data]
-
+        if isinstance(left, Name):
+            _left = scope.get(left.id, None)
+            if _left is not None and not isinstance(_left, arg):
+                left = _left
+                if isinstance(left, alias):
+                    real_left = left.entity
+                else:
+                    real_left = left
+                if not isinstance(real_left, Name | arg):
+                    left_scope = members(real_left)
+                    if right.data in left_scope:
+                        right = left_scope[right.data]
         elif (
             isinstance(left, Attribute)
             and isinstance(left.right, ClassDef | Module)
